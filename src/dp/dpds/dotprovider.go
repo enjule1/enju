@@ -10,10 +10,17 @@ import (
 
 type DotProvider interface {
 	Init()                                // Initialize the provider.
-	Begin(lower int, upper int) bool      // Begin providing dots. 
+	Begin(lower int, upper int) bool      // Begin providing all available dots. 
 	HasMore() bool                        // Are more dots available?
-	Populate(params ...interface{}) error // Pointer to meta dot.
+	Produce(params ...interface{}) error  // Produces and populates dot data fields.
 	Finalize() bool                       // Cleanup and shut down.
+}
+
+type DotConsumer interface {
+	Init()                                    // Initialize the provider.
+	Consume(params ...interface{}) error      // Consumes dot data.
+	Commit() error                            // Commit all changes.
+	Finalize() bool                           // Cleanup and shut down.
 }
 
 type DotProviderDB struct {
@@ -46,7 +53,7 @@ func (dp DotProviderDB) Begin(lower int, upper int) bool {
 	return true
 }
 
-func (dp DotProviderDB) Populate(params ...interface{}) error {
+func (dp DotProviderDB) Produce(params ...interface{}) error {
 	
 	if (len(params) != 4) {
 		return errors.New("Expected 4 dot fields for population")
