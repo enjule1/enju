@@ -17,18 +17,27 @@ type DotProvider interface {
 }
 
 type DotConsumer interface {
-	Init()                                    // Initialize the provider.
+	Init()                                    // Initialize the consumer.
 	Consume(params ...interface{}) error      // Consumes dot data.
 	Commit() error                            // Commit all changes.
 	Finalize() bool                           // Cleanup and shut down.
 }
 
+type DotBaseDB struct {
+	connDB     *sql.DB   // Connection pool
+}
+
 type DotProviderDB struct {
-    connDB     *sql.DB   // Connection pool
+	DotBaseDB
     rows       *sql.Rows // Current row set.
 }
 
-func (dp DotProviderDB) Init() {
+type DotConsumerDB struct {
+	dbd DotBaseDB
+	dotChannel   chan *ConsumableDot
+}
+
+func (dp DotBaseDB) Init() {
 	if dp.connDB == nil {
 		glog.Info("Begin DB connection pool.")
 		connDB, err := sql.Open("mysql", "@/enju?charset=utf8")
@@ -83,6 +92,55 @@ func (dp DotProviderDB) Finalize() bool {
 	return true
 }
 
+func (dc DotConsumerDB) Init() {
+	dc.dbd.Init()
+	dc.dotChannel = make(chan *ConsumableDot, 20)
+}
+
+type ConsumableDot struct {
+	id       int
+	parentId int
+	name     string
+	value    string
+}
+
+func (dc DotConsumerDB) Consume(params ...interface{}) error {
+	go func() {
+	    dc.dotChannel <- &ConsumableDot{params[0].(int), params[1].(int), params[2].(string), params[3].(string)}
+	}()
+	return nil
+}
+
+func (dc DotConsumerDB) Commit() error {
+	tx, err := dc.dbd.connDB.Begin()
+
+	if err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`"insert into dots (id, parentId, name, value) values (?, ?, ?, ?)`)
+	if err != nil {
+		defer tx.Rollback()
+		return err
+	}
+
+    for dot := range dc.dotChannel {
+    	_, err := stmt.Exec(-1, dot.parentId, dot.name, dot.value)
+    	if err != nil {
+    		defer tx.Rollback()
+    		return err
+    	}
+    }
+    
+    tx.Commit()
+
+	return nil
+}
+
+func (dc DotConsumerDB) Finalize() bool {
+	return true
+}
+
 type DotProviderFactory struct {
 	dp     DotProvider // Dot Provider interface
 }
@@ -93,7 +151,6 @@ func (dpf DotProviderFactory) GetInstance() DotProvider {
     }
     return dpf.dp
 }
-
 
 var dpf DotProviderFactory
 
