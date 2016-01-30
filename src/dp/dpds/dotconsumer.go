@@ -70,7 +70,7 @@ func (dc *DotConsumerDB) Commit() error {
 
 	go func() {
 		dc.waiter.Wait()
-	    close(dc.dotChannel)
+		dc.dotChannel<-nil
 	}()
 
     done := false
@@ -78,6 +78,7 @@ func (dc *DotConsumerDB) Commit() error {
 		select {
 			case dot := <-dc.dotChannel:
 			    if dot == nil {
+		            close(dc.dotChannel)
 			        done = true
 			    	break
 			    }
