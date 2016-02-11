@@ -27,7 +27,7 @@ type DotConsumerDB struct {
 
 func (dc *DotConsumerDB) Init() {
 	dc.dbd = new(DotBaseDB)
-	dc.dbd.Init()
+	dc.dbd.Init("")
 	dc.dotChannel = make(chan *ConsumableDot, 20)
 	dc.abort = make(chan int)
 }
