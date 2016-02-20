@@ -13,9 +13,11 @@ import (
 type DotProvider interface {
 	Init(dbSource string)                // Initialize the provider.
     GetSource() string                   // Get current data source used to init provider.
-	InitFields(tableName string, queryFields []string, whereFields []string, lowerBound int, upperBound int)
-    Construct() bool                     // Enable ability to construct a table.
-    Create() bool                        // Enable ability to insert/create into a table.
+	InitFields(tableName string, queryFields []string, valueFields []string, whereFields []string, preCommit func() (canCommit bool, err error), lowerBound int, upperBound int)
+    Construct() bool                     // Enable ability to construct a dot provider data store.
+    Create() bool                        // Enable ability to insert/create dot provider source.
+    Update() bool                        // Enable ability to update a dot.
+	Destroy() bool                       // Enable ability to destroy a provider source.
 	Begin() bool                         // Begin providing all available dots.
 	HasMore() bool                       // Are more dots available?
 	Produce(params ...interface{}) error // Produces and populates dot data fields.
@@ -27,15 +29,19 @@ type DotProviderDB struct {
 	rows        *sql.Rows // Current row set.
 	tableName   string    // Name of table to use.
 	queryFields []string  // Fields to query.
+	valueFields []string  // values of fields to use.
 	whereFields []string  // Where fields to use.
+	PreCommit func() (canCommit bool, err error) // Precommit function.
 	lowerBound  int       // lower bound to use.
 	upperBound  int       // upper bound to use.
 }
 
-func (dp *DotProviderDB) InitFields(tableName string, queryFields []string, whereFields []string, lowerBound int, upperBound int) {
+func (dp *DotProviderDB) InitFields(tableName string, queryFields []string, valueFields []string, whereFields []string, preCommit func() (canCommit bool, err error), lowerBound int, upperBound int) {
 	dp.tableName = tableName
 	dp.queryFields = queryFields
+	dp.valueFields = valueFields
 	dp.whereFields = whereFields
+	dp.PreCommit  = preCommit
 	dp.lowerBound = lowerBound
 	dp.upperBound = upperBound
 }
@@ -75,15 +81,35 @@ func (dp *DotProviderDB) Construct() bool {
 	return true
 }
 
+func (dp *DotProviderDB) Destroy() bool {
+	var buffer *bytes.Buffer = new(bytes.Buffer)
+
+	buffer.WriteString("DROP TABLE ")
+	buffer.WriteString(dp.tableName)
+	buffer.WriteString(";")
+
+    glog.Errorf("Destruction Query %s", buffer.String())
+    
+	_, err2 := dp.connDB.Exec(buffer.String())
+	if err2 != nil {
+		glog.Errorf("Couldn't get any %s %s", dp.tableName, err2)
+		return false
+	}
+
+	return true
+}
+
 func (dp *DotProviderDB) Create() bool {
 	var buffer *bytes.Buffer = new(bytes.Buffer)
 
-	buffer.WriteString("INSERT ")
-	writeToBuffer(dp.queryFields, buffer, ", ")
-	buffer.WriteString(" FROM ")
+	buffer.WriteString("INSERT INTO ")
 	buffer.WriteString(dp.tableName)
-	buffer.WriteString(" WHERE ")
-	writeToBuffer(dp.whereFields, buffer, " ")
+	buffer.WriteString(" ( ")
+	writeToBuffer(dp.queryFields, buffer, ", ")
+	buffer.WriteString(" ) ")
+	buffer.WriteString(" VALUES ( ")
+	writeToBuffer(dp.whereFields, buffer, ", ")
+	buffer.WriteString(" );")
 
     glog.Errorf("Query %s %d %d", buffer.String(), dp.lowerBound, dp.upperBound)
     
@@ -93,6 +119,30 @@ func (dp *DotProviderDB) Create() bool {
 		return false
 	}
 	dp.rows = rows
+
+	return true
+}
+
+func (dp *DotProviderDB) Update() bool {
+	var buffer *bytes.Buffer = new(bytes.Buffer)
+
+	buffer.WriteString("UPDATE ")
+	buffer.WriteString(dp.tableName)
+	buffer.WriteString(" SET ")
+	writeToBuffer(dp.queryFields, buffer, "=?, ")
+    glog.Errorf("Query %s %d %d", buffer.String(), dp.lowerBound, dp.upperBound)
+    
+    stmt, err2 := dp.connDB.Prepare(buffer.String())
+	if err2 != nil {
+		glog.Errorf("Couldn't update %s %s", dp.tableName, err2)
+		return false
+	}
+	
+	_, err3 := stmt.Exec(dp.valueFields)
+    if err3 != nil {
+		glog.Errorf("Couldn't update %s %s", dp.tableName, err3)
+		return false
+	}
 
 	return true
 }
@@ -166,9 +216,10 @@ func (dpf DotProviderFactory) GetInstance(dbSource string) DotProvider {
 			dpf.dotProviderMap[dbSource] = make(chan DotProvider, 20)
 
 			for i := 0; i < 20; i++ {
-				dotProvider := new(DotProviderDB)
-				dotProvider.Init(dbSource)
-				dpf.dotProviderMap[dbSource] <- dotProvider
+				var dotProvider interface{}
+				dotProvider = &DotProviderDB{}
+				dotProvider.(DotProvider).Init(dbSource)
+				dpf.dotProviderMap[dbSource] <-  dotProvider.(DotProvider)
 			}
 			glog.Errorf("Done initializing pool for %s", dbSource)
 		})
